@@ -8,3 +8,22 @@ coverage
 data
 tmp
 *.log
+
+# Host build outputs. The build stage produces its own (ui/dist is what the
+# server serves from at runtime — see server/src/app.ts), and copying a stale
+# host build into the context would shadow the fresh one.
+dist
+**/dist
+ui/storybook-static
+server/ui-dist
+
+# Docs, screenshots and test fixtures are not read at runtime; keeping them out
+# shrinks both the build context and the final image (COPY . . ships the whole
+# tree into the runtime stage).
+docs
+doc
+screenshots
+evals
+report
+releases
+tests

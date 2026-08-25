@@ -15,36 +15,27 @@ RUN usermod -u $USER_UID --non-unique node \
 FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
-COPY cli/package.json cli/
-COPY server/package.json server/
-COPY ui/package.json ui/
-COPY packages/shared/package.json packages/shared/
-COPY packages/db/package.json packages/db/
-COPY packages/adapter-utils/package.json packages/adapter-utils/
-COPY packages/google-sheets-mcp-server/package.json packages/google-sheets-mcp-server/
-COPY packages/kv-demo-mcp-server/package.json packages/kv-demo-mcp-server/
-COPY packages/mcp-server/package.json packages/mcp-server/
-COPY packages/paperclip-runner/package.json packages/paperclip-runner/
-COPY packages/skills-catalog/package.json packages/skills-catalog/
-COPY packages/tailscale-https-broker/package.json packages/tailscale-https-broker/
-COPY packages/teams-catalog/package.json packages/teams-catalog/
-COPY packages/adapters/claude-local/package.json packages/adapters/claude-local/
-COPY packages/adapters/codex-local/package.json packages/adapters/codex-local/
-COPY packages/adapters/cursor-cloud/package.json packages/adapters/cursor-cloud/
-COPY packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
-COPY packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
-COPY packages/adapters/grok-local/package.json packages/adapters/grok-local/
-COPY packages/adapters/kimi-local/package.json packages/adapters/kimi-local/
-COPY packages/adapters/hermes/package.json packages/adapters/hermes/
-COPY packages/adapters/hermes-gateway/package.json packages/adapters/hermes-gateway/
-COPY packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
-COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
-COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
-COPY packages/plugins/sdk/package.json packages/plugins/sdk/
-COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plugins/sandbox-providers/
-COPY packages/plugins/paperclip-plugin-fake-sandbox/package.json packages/plugins/paperclip-plugin-fake-sandbox/
-COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
-COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin-workspace-diff/
+# One glob per workspace root in pnpm-workspace.yaml, instead of a hand-listed
+# COPY per package. The hand-listed form silently drifted from the workspace
+# (packages/plugins/create-paperclip-plugin and the four
+# packages/plugins/examples/* members were in pnpm-lock.yaml but never copied
+# here), which leaves this stage installing a different importer set than the
+# lockfile describes. Globs cannot drift: adding a package to the workspace
+# adds it here automatically.
+#
+# sandbox-providers and plugin-orchestration-smoke-example are deliberately NOT
+# workspace members (see pnpm-workspace.yaml), so pnpm ignores their manifests
+# — but the root postinstall (scripts/link-plugin-dev-sdk.mjs) walks those
+# directories to link the in-repo plugin SDK into them, so their package.json
+# files still have to be present.
+COPY --parents \
+  ./*/package.json \
+  ./packages/*/package.json \
+  ./packages/adapters/*/package.json \
+  ./packages/plugins/*/package.json \
+  ./packages/plugins/examples/*/package.json \
+  ./packages/plugins/sandbox-providers/*/package.json \
+  ./
 COPY patches/ patches/
 COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
@@ -118,6 +109,17 @@ ENV NODE_ENV=production \
   GEMINI_SANDBOX=false
 
 EXPOSE 3100
+
+# GET /api/health needs no auth and answers 200 while the database probe
+# succeeds, 503 on `database_unreachable` — so it distinguishes "process is up"
+# from "actually serving", which is what a rolling deploy has to gate on.
+# 127.0.0.1 is always allowed past the private-hostname guard regardless of
+# PAPERCLIP_ALLOWED_HOSTNAMES, so this never needs updating per deployment.
+# The start period is generous: a first boot applies the bundled migrations
+# (and initialises the embedded cluster when DATABASE_URL is unset) before the
+# listener comes up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1
 
 # tini, not node, is PID 1. The entrypoint ends in `exec`, so without an init
 # node inherits PID 1 and never wait()s the orphans the kernel re-parents onto
