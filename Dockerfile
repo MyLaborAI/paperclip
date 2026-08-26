@@ -70,6 +70,30 @@ RUN pnpm --filter @paperclipai/plugin-sdk build
 # same ARG again for the runtime fallback; an ARG goes out of scope at the
 # end of its stage. Empty for local `docker build`, which then writes no stamp.
 ARG PAPERCLIP_BUILD_COMMIT=""
+# An image needs JavaScript, not a type check. The type check belongs to CI and
+# to the editor, and repeating it here is what makes this the peak-memory step
+# of the whole build: `tsc` over the server project builds a type graph across
+# @aws-sdk/client-s3, jsdom and the rest, and on a small build host the kernel
+# OOM-killer takes it (exit 137) before it finishes.
+#
+# `noCheck` (TypeScript 5.6+; this repo is on 5.9) emits without running the
+# checker, which reduces tsc to roughly a transpiler. Declaration emit has to go
+# with it: without a checker tsc cannot infer the types a .d.ts needs, so
+# leaving `declaration` on would put the expensive work straight back. Nothing
+# consumes the server's .d.ts from inside the image — the CMD runs dist/index.js.
+# `sourceMap` deliberately stays on, so production stack traces still resolve.
+#
+# This patches the config in the build stage instead of committing a second
+# tsconfig, so the repo keeps one source of truth and a sync with upstream has
+# nothing to conflict with. Set --build-arg TYPECHECK_IN_IMAGE=true to restore
+# the checked build on a host with the memory for it.
+ARG TYPECHECK_IN_IMAGE=false
+RUN if [ "$TYPECHECK_IN_IMAGE" = "true" ]; then \
+      echo "Type checking during image build (TYPECHECK_IN_IMAGE=true)"; \
+    else \
+      echo "Emitting without type checking; run the checker in CI"; \
+      node -e "const fs=require('node:fs'),f='server/tsconfig.json',c=JSON.parse(fs.readFileSync(f,'utf8'));c.compilerOptions={...c.compilerOptions,noCheck:true,declaration:false,declarationMap:false};fs.writeFileSync(f,JSON.stringify(c,null,2))"; \
+    fi
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
