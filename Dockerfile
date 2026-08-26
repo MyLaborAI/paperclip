@@ -43,6 +43,21 @@ RUN pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /app
+# Node sizes its old-space heap from the host's physical memory, so the ceiling
+# for every build below is set by whatever machine runs the build rather than by
+# anything in this repo. On a small build host (4 GB) that ceiling lands near
+# 2 GB, and `tsc` over the server project — which pulls in the @aws-sdk/client-s3
+# and jsdom type trees — exhausts it and aborts with "Ineffective mark-compacts
+# near heap limit" (exit 134). CI never hit this because GitHub runners are much
+# larger. Pin the ceiling here so it is a property of the build, not of the host.
+#
+# The value has to be backed by real RAM plus swap: set higher than the host can
+# provide and the kernel OOM-killer takes the process instead (exit 137), which
+# is harder to read than the clean heap abort. Override per host with
+# --build-arg NODE_BUILD_HEAP_MB=... . This ENV belongs to this stage only; the
+# production stage is FROM base and never inherits it.
+ARG NODE_BUILD_HEAP_MB=4096
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_BUILD_HEAP_MB}"
 COPY --from=deps /app /app
 COPY . .
 RUN pnpm --filter @paperclipai/ui build
